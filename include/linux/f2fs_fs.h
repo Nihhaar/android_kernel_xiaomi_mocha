@@ -363,10 +363,10 @@ struct f2fs_summary_block {
 typedef __le32	f2fs_hash_t;
 
 /* One directory entry slot covers 8bytes-long file name */
-#define F2FS_SLOT_LEN		8
-#define F2FS_SLOT_LEN_BITS	3
+#define F2FS_NAME_LEN		8
+#define F2FS_NAME_LEN_BITS	3
 
-#define GET_DENTRY_SLOTS(x)	((x + F2FS_SLOT_LEN - 1) >> F2FS_SLOT_LEN_BITS)
+#define GET_DENTRY_SLOTS(x)	((x + F2FS_NAME_LEN - 1) >> F2FS_NAME_LEN_BITS)
 
 /* the number of dentry in a block */
 #define NR_DENTRY_IN_BLOCK	214
