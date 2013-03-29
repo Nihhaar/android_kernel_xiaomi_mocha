@@ -137,8 +137,36 @@ void dgrp_register_proc(void)
 	/*
 	 *	Register /proc/dgrp
 	 */
-	dgrp_proc_dir_entry = proc_mkdir("dgrp", NULL);
-	if (!dgrp_proc_dir_entry)
+	dgrp_proc_dir_entry = proc_create("dgrp", S_IFDIR, NULL,
+					  &dgrp_proc_file_ops);
+	register_proc_table(dgrp_table, dgrp_proc_dir_entry);
+}
+
+/*
+ * /proc/sys support
+ */
+static int dgrp_proc_match(int len, const char *name, struct proc_dir_entry *de)
+{
+	if (!de || !de->low_ino)
+		return 0;
+	if (de->namelen != len)
+		return 0;
+	return !memcmp(name, de->name, len);
+}
+
+
+/*
+ *  Scan the entries in table and add them all to /proc at the position
+ *  referred to by "root"
+ */
+static void register_proc_table(struct dgrp_proc_entry *table,
+				struct proc_dir_entry *root)
+{
+	struct proc_dir_entry *de;
+	int len;
+	umode_t mode;
+
+	if (table == NULL)
 		return;
 	proc_create("dgrp/config", 0644, NULL, &config_proc_file_ops);
 	proc_create("dgrp/info", 0644, NULL, &info_proc_file_ops);
