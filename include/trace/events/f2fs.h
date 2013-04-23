@@ -8,6 +8,15 @@
 
 #define show_dev(entry)		MAJOR(entry->dev), MINOR(entry->dev)
 #define show_dev_ino(entry)	show_dev(entry), (unsigned long)entry->ino
+#define show_bio_type(type)						\
+	__print_symbolic(type,						\
+		{ READ, 	"READ" },				\
+		{ READA, 	"READAHEAD" },				\
+		{ READ_SYNC, 	"READ_SYNC" },				\
+		{ WRITE, 	"WRITE" },				\
+		{ WRITE_SYNC, 	"WRITE_SYNC" },				\
+		{ WRITE_FLUSH,	"WRITE_FLUSH" },			\
+		{ WRITE_FUA, 	"WRITE_FUA" })
 
 #define show_block_type(type)						\
 	__print_symbolic(type,						\
@@ -479,201 +488,6 @@ TRACE_EVENT(f2fs_get_data_block,
 		(unsigned long long)__entry->bh_start,
 		(unsigned long long)__entry->bh_size,
 		__entry->ret)
-);
-
-TRACE_EVENT(f2fs_get_victim,
-
-	TP_PROTO(struct super_block *sb, int type, int gc_type,
-			struct victim_sel_policy *p, unsigned int pre_victim,
-			unsigned int prefree, unsigned int free),
-
-	TP_ARGS(sb, type, gc_type, p, pre_victim, prefree, free),
-
-	TP_STRUCT__entry(
-		__field(dev_t,	dev)
-		__field(int,	type)
-		__field(int,	gc_type)
-		__field(int,	alloc_mode)
-		__field(int,	gc_mode)
-		__field(unsigned int,	victim)
-		__field(unsigned int,	ofs_unit)
-		__field(unsigned int,	pre_victim)
-		__field(unsigned int,	prefree)
-		__field(unsigned int,	free)
-	),
-
-	TP_fast_assign(
-		__entry->dev		= sb->s_dev;
-		__entry->type		= type;
-		__entry->gc_type	= gc_type;
-		__entry->alloc_mode	= p->alloc_mode;
-		__entry->gc_mode	= p->gc_mode;
-		__entry->victim		= p->min_segno;
-		__entry->ofs_unit	= p->ofs_unit;
-		__entry->pre_victim	= pre_victim;
-		__entry->prefree	= prefree;
-		__entry->free		= free;
-	),
-
-	TP_printk("dev = (%d,%d), type = %s, policy = (%s, %s, %s), victim = %u "
-		"ofs_unit = %u, pre_victim_secno = %d, prefree = %u, free = %u",
-		show_dev(__entry),
-		show_data_type(__entry->type),
-		show_gc_type(__entry->gc_type),
-		show_alloc_mode(__entry->alloc_mode),
-		show_victim_policy(__entry->gc_mode),
-		__entry->victim,
-		__entry->ofs_unit,
-		(int)__entry->pre_victim,
-		__entry->prefree,
-		__entry->free)
-);
-
-TRACE_EVENT(f2fs_fallocate,
-
-	TP_PROTO(struct inode *inode, int mode,
-				loff_t offset, loff_t len, int ret),
-
-	TP_ARGS(inode, mode, offset, len, ret),
-
-	TP_STRUCT__entry(
-		__field(dev_t,	dev)
-		__field(ino_t,	ino)
-		__field(int,	mode)
-		__field(loff_t,	offset)
-		__field(loff_t,	len)
-		__field(loff_t, size)
-		__field(blkcnt_t, blocks)
-		__field(int,	ret)
-	),
-
-	TP_fast_assign(
-		__entry->dev	= inode->i_sb->s_dev;
-		__entry->ino	= inode->i_ino;
-		__entry->mode	= mode;
-		__entry->offset	= offset;
-		__entry->len	= len;
-		__entry->size	= inode->i_size;
-		__entry->blocks = inode->i_blocks;
-		__entry->ret	= ret;
-	),
-
-	TP_printk("dev = (%d,%d), ino = %lu, mode = %x, offset = %lld, "
-		"len = %lld,  i_size = %lld, i_blocks = %llu, ret = %d",
-		show_dev_ino(__entry),
-		__entry->mode,
-		(unsigned long long)__entry->offset,
-		(unsigned long long)__entry->len,
-		(unsigned long long)__entry->size,
-		(unsigned long long)__entry->blocks,
-		__entry->ret)
-);
-
-TRACE_EVENT(f2fs_reserve_new_block,
-
-	TP_PROTO(struct inode *inode, nid_t nid, unsigned int ofs_in_node),
-
-	TP_ARGS(inode, nid, ofs_in_node),
-
-	TP_STRUCT__entry(
-		__field(dev_t,	dev)
-		__field(nid_t, nid)
-		__field(unsigned int, ofs_in_node)
-	),
-
-	TP_fast_assign(
-		__entry->dev	= inode->i_sb->s_dev;
-		__entry->nid	= nid;
-		__entry->ofs_in_node = ofs_in_node;
-	),
-
-	TP_printk("dev = (%d,%d), nid = %u, ofs_in_node = %u",
-		show_dev(__entry),
-		(unsigned int)__entry->nid,
-		__entry->ofs_in_node)
-);
-
-TRACE_EVENT(f2fs_do_submit_bio,
-
-	TP_PROTO(struct super_block *sb, int btype, bool sync, struct bio *bio),
-
-	TP_ARGS(sb, btype, sync, bio),
-
-	TP_STRUCT__entry(
-		__field(dev_t,	dev)
-		__field(int,	btype)
-		__field(bool,	sync)
-		__field(sector_t,	sector)
-		__field(unsigned int,	size)
-	),
-
-	TP_fast_assign(
-		__entry->dev		= sb->s_dev;
-		__entry->btype		= btype;
-		__entry->sync		= sync;
-		__entry->sector		= bio->bi_sector;
-		__entry->size		= bio->bi_size;
-	),
-
-	TP_printk("dev = (%d,%d), type = %s, io = %s, sector = %lld, size = %u",
-		show_dev(__entry),
-		show_block_type(__entry->btype),
-		__entry->sync ? "sync" : "no sync",
-		(unsigned long long)__entry->sector,
-		__entry->size)
-);
-
-TRACE_EVENT(f2fs_submit_write_page,
-
-	TP_PROTO(struct page *page, block_t blk_addr, int type),
-
-	TP_ARGS(page, blk_addr, type),
-
-	TP_STRUCT__entry(
-		__field(dev_t,	dev)
-		__field(ino_t,	ino)
-		__field(int, type)
-		__field(pgoff_t, index)
-		__field(block_t, block)
-	),
-
-	TP_fast_assign(
-		__entry->dev	= page->mapping->host->i_sb->s_dev;
-		__entry->ino	= page->mapping->host->i_ino;
-		__entry->type	= type;
-		__entry->index	= page->index;
-		__entry->block	= blk_addr;
-	),
-
-	TP_printk("dev = (%d,%d), ino = %lu, %s, index = %lu, blkaddr = 0x%llx",
-		show_dev_ino(__entry),
-		show_block_type(__entry->type),
-		(unsigned long)__entry->index,
-		(unsigned long long)__entry->block)
-);
-
-TRACE_EVENT(f2fs_write_checkpoint,
-
-	TP_PROTO(struct super_block *sb, bool is_umount, char *msg),
-
-	TP_ARGS(sb, is_umount, msg),
-
-	TP_STRUCT__entry(
-		__field(dev_t,	dev)
-		__field(bool,	is_umount)
-		__field(char *,	msg)
-	),
-
-	TP_fast_assign(
-		__entry->dev		= sb->s_dev;
-		__entry->is_umount	= is_umount;
-		__entry->msg		= msg;
-	),
-
-	TP_printk("dev = (%d,%d), checkpoint for %s, state = %s",
-		show_dev(__entry),
-		__entry->is_umount ? "clean umount" : "consistency",
-		__entry->msg)
 );
 
 #endif /* _TRACE_F2FS_H */
