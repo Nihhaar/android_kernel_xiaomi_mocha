@@ -3,7 +3,6 @@
  *
  * A Logging Subsystem
  *
- * Copyright (C) 2007-2008 Google, Inc.
  * Copyright (C) 2016 XiaoMi, Inc.
  *
  * Robert Love <rlove@google.com>
@@ -246,7 +245,7 @@ static ssize_t do_read_log_to_user(struct logger_log *log,
  * 'log->buffer' which contains the first entry readable by 'euid'
  */
 static size_t get_next_entry_by_uid(struct logger_log *log,
-		size_t off, kuid_t euid)
+		size_t off, uid_t euid)
 {
 	while (off != log->w_off) {
 		struct logger_entry *entry;
@@ -255,7 +254,7 @@ static size_t get_next_entry_by_uid(struct logger_log *log,
 
 		entry = get_entry_header(log, off, &scratch);
 
-		if (uid_eq(entry->euid, euid))
+		if (entry->euid == euid)
 			return off;
 
 		next_len = sizeof(struct logger_entry) + entry->len;
@@ -473,7 +472,7 @@ static ssize_t logger_aio_write(struct kiocb *iocb, const struct iovec *iov,
 			 unsigned long nr_segs, loff_t ppos)
 {
 	struct logger_log *log = file_get_log(iocb->ki_filp);
-	size_t orig;
+	size_t orig = log->w_off;
 	struct logger_entry header;
 	struct timespec now;
 	ssize_t ret = 0;
@@ -494,7 +493,6 @@ static ssize_t logger_aio_write(struct kiocb *iocb, const struct iovec *iov,
 
 	mutex_lock(&log->mutex);
 
-	orig = log->w_off;
 
 	/*
 	 * Fix up any readers, pulling them forward to the first readable
@@ -902,7 +900,7 @@ static int __init logger_init(void)
 {
 	int ret;
 
-	ret = create_log(LOGGER_LOG_MAIN, 2*1024*1024);
+	ret = create_log(LOGGER_LOG_MAIN, 256*1024);
 	if (unlikely(ret))
 		goto out;
 
@@ -914,7 +912,7 @@ static int __init logger_init(void)
 	if (unlikely(ret))
 		goto out;
 
-	ret = create_log(LOGGER_LOG_SYSTEM, 2*1024*1024);
+	ret = create_log(LOGGER_LOG_SYSTEM, 256*1024);
 	if (unlikely(ret))
 		goto out;
 
