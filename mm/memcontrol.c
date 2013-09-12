@@ -2196,20 +2196,14 @@ static void memcg_oom_recover(struct mem_cgroup *memcg)
  */
 static void mem_cgroup_oom(struct mem_cgroup *memcg, gfp_t mask, int order)
 {
+	struct oom_wait_info owait;
+	bool locked;
 	int wakeups;
 
 	if (!current->memcg_oom.may_oom)
 		return;
 
 	current->memcg_oom.in_memcg_oom = 1;
-	struct oom_wait_info owait;
-	bool locked;
-
-	owait.memcg = memcg;
-	owait.wait.flags = 0;
-	owait.wait.func = memcg_oom_wake_function;
-	owait.wait.private = current;
-	INIT_LIST_HEAD(&owait.wait.task_list);
 
 	/*
 	 * As with any blocking lock, a contender needs to start
@@ -2219,12 +2213,6 @@ static void mem_cgroup_oom(struct mem_cgroup *memcg, gfp_t mask, int order)
 	 * is so particular to memcg hierarchies.
 	 */
 	wakeups = atomic_read(&memcg->oom_wakeups);
-	 *
-	 * Even if signal_pending(), we can't quit charge() loop without
-	 * accounting. So, UNINTERRUPTIBLE is appropriate. But SIGKILL
-	 * under OOM is always welcomed, use TASK_KILLABLE here.
-	 */
-	prepare_to_wait(&memcg_oom_waitq, &owait.wait, TASK_KILLABLE);
 	mem_cgroup_mark_under_oom(memcg);
 
 	locked = mem_cgroup_oom_trylock(memcg);
@@ -2234,7 +2222,6 @@ static void mem_cgroup_oom(struct mem_cgroup *memcg, gfp_t mask, int order)
 
 	if (locked && !memcg->oom_kill_disable) {
 		mem_cgroup_unmark_under_oom(memcg);
-		finish_wait(&memcg_oom_waitq, &owait.wait);
 		mem_cgroup_out_of_memory(memcg, mask, order);
 		mem_cgroup_oom_unlock(memcg);
 		/*
@@ -2268,21 +2255,7 @@ static void mem_cgroup_oom(struct mem_cgroup *memcg, gfp_t mask, int order)
 		current->memcg_oom.wakeups = wakeups;
 		css_get(&memcg->css);
 		current->memcg_oom.wait_on_memcg = memcg;
-		schedule();
-                mem_cgroup_unmark_under_oom(memcg);
-                finish_wait(&memcg_oom_waitq, &owait.wait);
-        }
-
-        if (locked) {
-                mem_cgroup_oom_unlock(memcg);
-                /*
-                 * There is no guarantee that an OOM-lock contender
-                 * sees the wakeups triggered by the OOM kill
-                 * uncharges.  Wake any sleepers explicitely.
-                 */
-                memcg_oom_recover(memcg);
-        }
-
+	}
 }
 
 /**
