@@ -559,6 +559,8 @@ static int generic_pipe_buf_nosteal(struct pipe_inode_info *pipe,
 /* Pipe buffer operations for a socket and similar. */
 const struct pipe_buf_operations nosteal_pipe_buf_ops = {
 	.can_merge = 0,
+	.map = generic_pipe_buf_map,
+	.unmap = generic_pipe_buf_unmap,
 	.confirm = generic_pipe_buf_confirm,
 	.release = generic_pipe_buf_release,
 	.steal = generic_pipe_buf_nosteal,
