@@ -25,6 +25,7 @@
 #include <linux/io.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
+#include <linux/irqchip.h>
 #include <linux/clk/tegra.h>
 #include <linux/highmem.h>
 #include <linux/memblock.h>
@@ -700,6 +701,20 @@ void tegra_init_cache(bool init)
 		writel(0x3, p + L2X0_POWER_CTRL);
 	}
 #endif
+	static const struct of_device_id pl310_ids[] __initconst = {
+		{ .compatible = "arm,pl310-cache",  },
+		{}
+	};
+
+	struct device_node *np;
+	int ret;
+	void __iomem *p = IO_ADDRESS(TEGRA_ARM_PERIF_BASE) + 0x3000;
+	u32 aux_ctrl, cache_type;
+
+	np = of_find_matching_node(NULL, pl310_ids);
+	if (!np)
+		return;
+
 	cache_type = readl(p + L2X0_CACHE_TYPE);
 	aux_ctrl = (cache_type & 0x700) << (17-8);
 	aux_ctrl |= 0x7C400001;
