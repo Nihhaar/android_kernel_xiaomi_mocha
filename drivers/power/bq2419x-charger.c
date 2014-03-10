@@ -58,6 +58,10 @@ extern int tps6591x_gpio7_enable(bool enable);
 #define BQ2419X_PRE_CHG_IPRECHG_OFFSET	128
 #define BQ2419X_PRE_CHG_TERM_OFFSET	128
 #define BQ2419X_CHARGE_VOLTAGE_OFFSET	3504
+#define BQ2419X_CHARGE_LED_OFF		1
+#define BQ2419x_OTG_ENABLE_TIME		(30*HZ)
+#define BQ2419x_TEMP_H_CHG_DISABLE	50
+#define BQ2419x_TEMP_L_CHG_DISABLE	0
 
 /* input current limit */
 static const unsigned int iinlim[] = {
@@ -84,6 +88,7 @@ struct bq2419x_chip {
 	int				wdt_time_sec;
 
 	struct mutex			mutex;
+	struct mutex			otg_mutex;
 	int				in_current_limit;
 
 	struct regulator_dev		*chg_rdev;
@@ -98,13 +103,17 @@ struct bq2419x_chip {
 	int				chg_status;
 
 	struct delayed_work		wdt_restart_wq;
-
+	struct delayed_work		otg_reset_work;
 	int				chg_restart_time;
+	int				is_otg_connected;
 	int				battery_presense;
 	bool				cable_connected;
 	int				last_charging_current;
 	bool				disable_suspend_during_charging;
+	bool				thermal_chg_disable;
 	int				last_temp;
+	u32				auto_recharge_time_supend;
+	int				chg_status_gpio;
 	struct bq2419x_reg_info		input_src;
 	struct bq2419x_reg_info		chg_current_control;
 	struct bq2419x_reg_info		prechg_term_control;
@@ -162,10 +171,14 @@ static int bq2419x_vbus_enable(struct regulator_dev *rdev)
 
 	dev_info(bq2419x->dev, "VBUS enabled, charging disabled\n");
 
+	mutex_lock(&bq2419x->otg_mutex);
+	bq2419x->is_otg_connected = true;
 	ret = regmap_update_bits(bq2419x->regmap, BQ2419X_PWR_ON_REG,
 			BQ2419X_ENABLE_CHARGE_MASK, BQ2419X_ENABLE_VBUS);
 	if (ret < 0)
 		dev_err(bq2419x->dev, "PWR_ON_REG update failed %d", ret);
+	mutex_unlock(&bq2419x->otg_mutex);
+
 	return ret;
 }
 
@@ -175,9 +188,14 @@ static int bq2419x_vbus_disable(struct regulator_dev *rdev)
 	int ret;
 
 	dev_info(bq2419x->dev, "VBUS disabled, charging enabled\n");
+
+	mutex_lock(&bq2419x->otg_mutex);
+	bq2419x->is_otg_connected = false;
 	ret = bq2419x_charger_enable(bq2419x);
 	if (ret < 0)
 		dev_err(bq2419x->dev, "Charger enable failed %d", ret);
+	mutex_unlock(&bq2419x->otg_mutex);
+
 	return ret;
 }
 
@@ -343,6 +361,48 @@ static int bq2419x_charger_init(struct bq2419x_chip *bq2419x)
 			BQ2419X_TIME_JEITA_ISET, 0);
 	if (ret < 0)
 		dev_err(bq2419x->dev, "TIME_CTRL update failed: %d\n", ret);
+
+	return ret;
+}
+
+static void bq2419x_otg_reset_work_handler(struct work_struct *work)
+{
+	int ret;
+	struct bq2419x_chip *bq2419x = container_of(to_delayed_work(work),
+			struct bq2419x_chip, otg_reset_work);
+
+	if (!mutex_is_locked(&bq2419x->otg_mutex)) {
+		mutex_lock(&bq2419x->otg_mutex);
+		if (bq2419x->is_otg_connected) {
+			ret = regmap_update_bits(bq2419x->regmap,
+					BQ2419X_PWR_ON_REG,
+					BQ2419X_ENABLE_CHARGE_MASK,
+					BQ2419X_ENABLE_VBUS);
+			if (ret < 0)
+				dev_err(bq2419x->dev,
+				"PWR_ON_REG update failed %d", ret);
+		}
+		mutex_unlock(&bq2419x->otg_mutex);
+	}
+}
+
+static int bq2419x_disable_otg_mode(struct bq2419x_chip *bq2419x)
+{
+	int ret = 0;
+
+	mutex_lock(&bq2419x->otg_mutex);
+	if (bq2419x->is_otg_connected) {
+		ret = bq2419x_charger_enable(bq2419x);
+		if (ret < 0) {
+			dev_err(bq2419x->dev,
+				"Charger enable failed %d", ret);
+			mutex_unlock(&bq2419x->otg_mutex);
+			return ret;
+		}
+		schedule_delayed_work(&bq2419x->otg_reset_work,
+					BQ2419x_OTG_ENABLE_TIME);
+	}
+	mutex_unlock(&bq2419x->otg_mutex);
 
 	return ret;
 }
@@ -526,21 +586,50 @@ scrub:
 	return ret;
 }
 
-static int bq2419x_fault_clear_sts(struct bq2419x_chip *bq2419x)
+static int bq2419x_fault_clear_sts(struct bq2419x_chip *bq2419x,
+	unsigned int *reg09_val)
 {
 	int ret;
-	unsigned int reg09;
+	unsigned int reg09_1, reg09_2;
 
-	ret = regmap_read(bq2419x->regmap, BQ2419X_FAULT_REG, &reg09);
+	ret = regmap_read(bq2419x->regmap, BQ2419X_FAULT_REG, &reg09_1);
 	if (ret < 0) {
 		dev_err(bq2419x->dev, "FAULT_REG read failed: %d\n", ret);
 		return ret;
 	}
 
-	ret = regmap_read(bq2419x->regmap, BQ2419X_FAULT_REG, &reg09);
+	ret = regmap_read(bq2419x->regmap, BQ2419X_FAULT_REG, &reg09_2);
 	if (ret < 0)
 		dev_err(bq2419x->dev, "FAULT_REG read failed: %d\n", ret);
 
+	if (reg09_val) {
+		unsigned int reg09 = 0;
+
+		if ((reg09_1 | reg09_2) & BQ2419x_FAULT_WATCHDOG_FAULT)
+			reg09 |= BQ2419x_FAULT_WATCHDOG_FAULT;
+		if ((reg09_1 | reg09_2) & BQ2419x_FAULT_BOOST_FAULT)
+			reg09 |= BQ2419x_FAULT_BOOST_FAULT;
+		if ((reg09_1 | reg09_2) & BQ2419x_FAULT_BAT_FAULT)
+			reg09 |= BQ2419x_FAULT_BAT_FAULT;
+		if (((reg09_1 & BQ2419x_FAULT_CHRG_FAULT_MASK) ==
+				BQ2419x_FAULT_CHRG_SAFTY) ||
+			((reg09_2 & BQ2419x_FAULT_CHRG_FAULT_MASK) ==
+				BQ2419x_FAULT_CHRG_SAFTY))
+			reg09 |= BQ2419x_FAULT_CHRG_SAFTY;
+		else if (((reg09_1 & BQ2419x_FAULT_CHRG_FAULT_MASK) ==
+				BQ2419x_FAULT_CHRG_INPUT) ||
+			((reg09_2 & BQ2419x_FAULT_CHRG_FAULT_MASK) ==
+				BQ2419x_FAULT_CHRG_INPUT))
+			reg09 |= BQ2419x_FAULT_CHRG_INPUT;
+		else if (((reg09_1 & BQ2419x_FAULT_CHRG_FAULT_MASK) ==
+				BQ2419x_FAULT_CHRG_THERMAL) ||
+			((reg09_2 & BQ2419x_FAULT_CHRG_FAULT_MASK) ==
+				BQ2419x_FAULT_CHRG_THERMAL))
+			reg09 |= BQ2419x_FAULT_CHRG_THERMAL;
+
+		reg09 |= reg09_2 &BQ2419x_FAULT_NTC_FAULT;
+		*reg09_val = reg09;
+	}
 	return ret;
 }
 
@@ -636,17 +725,29 @@ static irqreturn_t bq2419x_irq(int irq, void *data)
 	unsigned int val;
 	int check_chg_state = 0;
 
-	ret = regmap_read(bq2419x->regmap, BQ2419X_FAULT_REG, &val);
+	ret = bq2419x_fault_clear_sts(bq2419x, &val);
 	if (ret < 0) {
-		dev_err(bq2419x->dev, "FAULT_REG read failed %d\n", ret);
+		dev_err(bq2419x->dev, "fault clear status failed %d\n", ret);
 		return ret;
 	}
 
 	dev_info(bq2419x->dev, "%s() Irq %d fault 0x%02x\n",
 		__func__, irq, val);
 
-	if (val & BQ2419x_FAULT_BOOST_FAULT)
+	if ((val & BQ2419x_CHARGING_FAULT_MASK) &&
+			gpio_is_valid(bq2419x->chg_status_gpio) &&
+			bq2419x->chg_status == BATTERY_CHARGING) {
+		gpio_set_value(bq2419x->chg_status_gpio, BQ2419X_CHARGE_LED_OFF);
+	}
+
+	if (val & BQ2419x_FAULT_BOOST_FAULT) {
 		bq_chg_err(bq2419x, "VBUS Overloaded\n");
+		ret = bq2419x_disable_otg_mode(bq2419x);
+		if (ret < 0) {
+			bq_chg_err(bq2419x, "otg mode disable failed\n");
+			return ret;
+		}
+	}
 
 	if (!bq2419x->battery_presense)
 		return IRQ_HANDLED;
@@ -682,6 +783,11 @@ static irqreturn_t bq2419x_irq(int irq, void *data)
 	case BQ2419x_FAULT_CHRG_THERMAL:
 		bq_chg_err(bq2419x, "Thermal shutdown\n");
 		check_chg_state = 1;
+		ret = bq2419x_disable_otg_mode(bq2419x);
+		if (ret < 0) {
+			bq_chg_err(bq2419x, "otg mode disable failed\n");
+			return ret;
+		}
 		break;
 	case BQ2419x_FAULT_CHRG_SAFTY:
 		bq_chg_err(bq2419x, "Safety timer expiration\n");
@@ -690,6 +796,25 @@ static irqreturn_t bq2419x_irq(int irq, void *data)
 			dev_err(bq2419x->dev, "Reset safety timer failed %d\n",
 							ret);
 			return ret;
+		}
+
+		ret = regmap_read(bq2419x->regmap, BQ2419X_PWR_ON_REG, &val);
+		if (ret < 0) {
+			dev_err(bq2419x->dev, "PWR_ON_REG read failed %d",
+							ret);
+			return ret;
+		}
+
+		if ((val & BQ2419X_ENABLE_CHARGE_MASK) ==
+						BQ2419X_DISABLE_CHARGE) {
+			ret = regmap_update_bits(bq2419x->regmap,
+				BQ2419X_PWR_ON_REG, BQ2419X_ENABLE_CHARGE_MASK,
+				BQ2419X_ENABLE_CHARGE);
+			if (ret < 0) {
+				dev_err(bq2419x->dev,
+					"PWR_ON_REG update failed, %d\n", ret);
+				return ret;
+			}
 		}
 		check_chg_state = 1;
 		break;
@@ -701,12 +826,6 @@ static irqreturn_t bq2419x_irq(int irq, void *data)
 		bq_chg_err(bq2419x, "NTC fault %d\n",
 				val & BQ2419x_FAULT_NTC_FAULT);
 		check_chg_state = 1;
-	}
-
-	ret = bq2419x_fault_clear_sts(bq2419x);
-	if (ret < 0) {
-		dev_err(bq2419x->dev, "fault clear status failed %d\n", ret);
-		return ret;
 	}
 
 	ret = regmap_read(bq2419x->regmap, BQ2419X_SYS_STAT_REG, &val);
@@ -1101,10 +1220,11 @@ static int bq2419x_charger_thermal_configure(
 	struct bq2419x_chip *bq2419x = battery_charger_get_drvdata(bc_dev);
 	struct bq2419x_charger_platform_data *chg_pdata;
 	int fast_charge_current = 0;
+	u32 charge_voltage_limit = 0;
 	int ichg;
 	int ret;
 	int i;
-	int curr_ichg;
+	int curr_ichg, vreg;
 
 	chg_pdata = bq2419x->charger_pdata;
 	if (!bq2419x->cable_connected || !chg_pdata->n_temp_profile)
@@ -1117,9 +1237,40 @@ static int bq2419x_charger_thermal_configure(
 
 	dev_info(bq2419x->dev, "Battery temp %d\n", temp);
 
+	if ((temp > BQ2419x_TEMP_H_CHG_DISABLE ||
+				temp < BQ2419x_TEMP_L_CHG_DISABLE) &&
+				!bq2419x->thermal_chg_disable) {
+		ret = regmap_update_bits(bq2419x->regmap, BQ2419X_PWR_ON_REG,
+				 BQ2419X_ENABLE_CHARGE_MASK,
+				 BQ2419X_DISABLE_CHARGE);
+		if (ret < 0) {
+			dev_err(bq2419x->dev, "REG update failed, %d\n", ret);
+			return ret;
+		}
+		dev_info(bq2419x->dev, "Thermal: Charging disabled\n");
+		bq2419x->thermal_chg_disable = true;
+	}
+
+	if ((temp <= BQ2419x_TEMP_H_CHG_DISABLE &&
+				temp >= BQ2419x_TEMP_L_CHG_DISABLE) &&
+				bq2419x->thermal_chg_disable) {
+		ret = regmap_update_bits(bq2419x->regmap, BQ2419X_PWR_ON_REG,
+				BQ2419X_ENABLE_CHARGE_MASK,
+				BQ2419X_ENABLE_CHARGE);
+		if (ret < 0) {
+			dev_err(bq2419x->dev, "REG update failed, %d\n", ret);
+			return ret;
+		}
+		dev_info(bq2419x->dev, "Thermal: Charging enabled\n");
+		bq2419x->thermal_chg_disable = false;
+	}
+
 	for (i = 0; i < chg_pdata->n_temp_profile; ++i) {
 		if (temp <= chg_pdata->temp_range[i]) {
 			fast_charge_current = chg_pdata->chg_current_limit[i];
+			if (chg_pdata->chg_thermal_voltage_limit)
+				charge_voltage_limit =
+					chg_pdata->chg_thermal_voltage_limit[i];
 			break;
 		}
 	}
@@ -1145,6 +1296,23 @@ static int bq2419x_charger_thermal_configure(
 		dev_err(bq2419x->dev, "CHRG_CTRL_REG update failed %d\n", ret);
 		return ret;
 	}
+
+	if (!charge_voltage_limit)
+		return 0;
+
+	/* Charge voltage limit */
+	vreg = bq2419x_val_to_reg(charge_voltage_limit,
+			BQ2419X_CHARGE_VOLTAGE_OFFSET, 16, 6, 1);
+	bq2419x->chg_voltage_control.mask = BQ2419X_CHG_VOLT_LIMIT_MASK;
+	bq2419x->chg_voltage_control.val = vreg << 2;
+	ret = regmap_update_bits(bq2419x->regmap, BQ2419X_VOLT_CTRL_REG,
+				bq2419x->chg_voltage_control.mask,
+				bq2419x->chg_voltage_control.val);
+	if (ret < 0) {
+		dev_err(bq2419x->dev, "VOLT_CTRL_REG update failed %d\n", ret);
+		return ret;
+	}
+
 	return 0;
 }
 
@@ -1238,13 +1406,14 @@ static struct bq2419x_platform_data *bq2419x_dt_parse(struct i2c_client *client)
 
 	batt_reg_node = of_find_node_by_name(np, "charger");
 	if (batt_reg_node) {
-		int temp_range_len, chg_current_lim_len;
+		int temp_range_len, chg_current_lim_len, chg_voltage_lim_len;
 		int wdt_timeout;
 		int chg_restart_time;
 		int temp_polling_time;
 		struct regulator_init_data *batt_init_data;
 		struct bq2419x_charger_platform_data *chg_pdata;
 		const char *status_str;
+		struct bq2419x_charger_platform_data *bcharger_pdata;
 		u32 pval;
 
 		status_str = of_get_property(batt_reg_node, "status", NULL);
@@ -1259,11 +1428,17 @@ static struct bq2419x_platform_data *bq2419x_dt_parse(struct i2c_client *client)
 		if (!pdata->bcharger_pdata)
 			return ERR_PTR(-ENOMEM);
 
+		bcharger_pdata = pdata->bcharger_pdata;
+
 		chg_pdata = pdata->bcharger_pdata;
 		batt_init_data = of_get_regulator_init_data(&client->dev,
 								batt_reg_node);
 		if (!batt_init_data)
 			return ERR_PTR(-EINVAL);
+
+		bcharger_pdata->chg_status_gpio =
+				of_get_named_gpio(batt_reg_node,
+					"ti,charge-status-gpio", 0);
 
 		ret = of_property_read_u32(batt_reg_node,
 				"ti,input-voltage-limit-millivolt", &pval);
@@ -1321,6 +1496,13 @@ static struct bq2419x_platform_data *bq2419x_dt_parse(struct i2c_client *client)
 							chg_restart_time;
 
 		ret = of_property_read_u32(batt_reg_node,
+				"ti,auto-recharge-time-suspend",
+				&chg_restart_time);
+		if (!ret)
+			pdata->bcharger_pdata->auto_recharge_time_supend =
+							chg_restart_time;
+
+		ret = of_property_read_u32(batt_reg_node,
 			"ti,temp-polling-time-sec", &temp_polling_time);
 		if (!ret)
 			pdata->bcharger_pdata->temp_polling_time_sec =
@@ -1333,10 +1515,21 @@ static struct bq2419x_platform_data *bq2419x_dt_parse(struct i2c_client *client)
 					"ti,temp-range");
 		chg_current_lim_len = of_property_count_u32(batt_reg_node,
 					"ti,charge-current-limit");
+		if (!chg_current_lim_len)
+			chg_current_lim_len = of_property_count_u32(batt_reg_node,
+					"ti,charge-thermal-current-limit");
+		chg_voltage_lim_len = of_property_count_u32(batt_reg_node,
+					"ti,charge-thermal-voltage-limit");
 		if (temp_range_len < 0)
 			goto skip_therm_profile;
 
 		if (temp_range_len != chg_current_lim_len) {
+			dev_info(&client->dev,
+				"thermal profile data is not correct\n");
+			goto skip_therm_profile;
+		}
+
+		if (chg_voltage_lim_len && (temp_range_len != chg_voltage_lim_len)) {
 			dev_info(&client->dev,
 				"thermal profile data is not correct\n");
 			goto skip_therm_profile;
@@ -1362,8 +1555,31 @@ static struct bq2419x_platform_data *bq2419x_dt_parse(struct i2c_client *client)
 				chg_pdata->chg_current_limit,
 				temp_range_len);
 		if (ret < 0)
+			ret = of_property_read_u32_array(batt_reg_node,
+				"ti,charge-thermal-current-limit",
+					chg_pdata->chg_current_limit,
+					temp_range_len);
+		if (ret < 0)
 			return ERR_PTR(ret);
 
+		if (!chg_voltage_lim_len)
+			goto skip_thermal_volt_profle;
+
+		chg_pdata->chg_thermal_voltage_limit =
+					devm_kzalloc(&client->dev,
+					sizeof(u32) * temp_range_len,
+					GFP_KERNEL);
+		if (!chg_pdata->chg_thermal_voltage_limit)
+			return ERR_PTR(-ENOMEM);
+
+		ret = of_property_read_u32_array(batt_reg_node,
+				"ti,charge-thermal-voltage-limit",
+				chg_pdata->chg_thermal_voltage_limit,
+				temp_range_len);
+		if (ret < 0)
+			return ERR_PTR(ret);
+
+skip_thermal_volt_profle:
 		chg_pdata->n_temp_profile = temp_range_len;
 
 skip_therm_profile:
@@ -1445,6 +1661,8 @@ static int bq2419x_probe(struct i2c_client *client,
 	bq2419x->dev = &client->dev;
 	i2c_set_clientdata(client, bq2419x);
 	bq2419x->irq = client->irq;
+	mutex_init(&bq2419x->otg_mutex);
+	bq2419x->is_otg_connected = 0;
 
 	ret = bq2419x_show_chip_version(bq2419x);
 	if (ret < 0) {
@@ -1468,7 +1686,7 @@ static int bq2419x_probe(struct i2c_client *client,
 			goto scrub_mutex;
 		}
 
-		ret = bq2419x_fault_clear_sts(bq2419x);
+		ret = bq2419x_fault_clear_sts(bq2419x, NULL);
 		if (ret < 0) {
 			dev_err(bq2419x->dev, "fault clear status failed %d\n", ret);
 			goto scrub_mutex;
@@ -1482,6 +1700,10 @@ static int bq2419x_probe(struct i2c_client *client,
 	bq2419x->last_temp = -1000;
 	bq2419x->disable_suspend_during_charging =
 			pdata->bcharger_pdata->disable_suspend_during_charging;
+	bq2419x->auto_recharge_time_supend =
+			pdata->bcharger_pdata->auto_recharge_time_supend;
+	bq2419x->chg_status_gpio = pdata->bcharger_pdata->chg_status_gpio;
+	bq2419x->thermal_chg_disable = false;
 
 	bq2419x_process_charger_plat_data(bq2419x, pdata->bcharger_pdata);
 
@@ -1517,7 +1739,9 @@ static int bq2419x_probe(struct i2c_client *client,
 		goto scrub_wq;
 	}
 
-	ret = bq2419x_fault_clear_sts(bq2419x);
+	INIT_DELAYED_WORK(&bq2419x->otg_reset_work,
+				bq2419x_otg_reset_work_handler);
+	ret = bq2419x_fault_clear_sts(bq2419x, NULL);
 	if (ret < 0) {
 		dev_err(bq2419x->dev, "fault clear status failed %d\n", ret);
 		goto scrub_wq;
@@ -1532,6 +1756,22 @@ static int bq2419x_probe(struct i2c_client *client,
 		dev_info(bq2419x->dev,
 			"Supporting bq driver without interrupt\n");
 		ret = 0;
+	}
+
+	if (gpio_is_valid(bq2419x->chg_status_gpio)) {
+		ret = devm_gpio_request(bq2419x->dev, bq2419x->chg_status_gpio,
+						"charger_led");
+		if (ret < 0) {
+			dev_err(bq2419x->dev, "error: can't request GPIO%d\n",
+				bq2419x->chg_status_gpio);
+		} else {
+			ret = gpio_direction_output(bq2419x->chg_status_gpio, 0);
+			if (ret < 0) {
+				dev_err(bq2419x->dev,
+					"can't setup GPIO%d as Output\n",
+					bq2419x->chg_status_gpio);
+			}
+		}
 	}
 
 skip_bcharger_init:
@@ -1556,6 +1796,7 @@ scrub_wq:
 	}
 scrub_mutex:
 	mutex_destroy(&bq2419x->mutex);
+	mutex_destroy(&bq2419x->otg_mutex);
 	return ret;
 }
 
@@ -1569,6 +1810,8 @@ static int bq2419x_remove(struct i2c_client *client)
 	}
 	regulator_unregister(bq2419x->vbus_rdev);
 	mutex_destroy(&bq2419x->mutex);
+	mutex_destroy(&bq2419x->otg_mutex);
+	cancel_delayed_work_sync(&bq2419x->otg_reset_work);
 	return 0;
 }
 
@@ -1595,6 +1838,7 @@ static void bq2419x_shutdown(struct i2c_client *client)
 	}
 
 	battery_charging_system_power_on_usb_event(bq2419x->bc_dev);
+	cancel_delayed_work_sync(&bq2419x->otg_reset_work);
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -1615,7 +1859,18 @@ static int bq2419x_suspend(struct device *dev)
 		(bq2419x->in_current_limit > 500)) {
 			battery_charging_wakeup(bq2419x->bc_dev,
 					bq2419x->wdt_refresh_timeout);
-	} else  {
+	} else if (bq2419x->cable_connected &&
+		bq2419x->auto_recharge_time_supend &&
+		(bq2419x->in_current_limit > 500) &&
+		(bq2419x->chg_status == BATTERY_CHARGING_DONE)){
+			battery_charging_wakeup(bq2419x->bc_dev,
+					bq2419x->auto_recharge_time_supend);
+			ret = bq2419x_set_charging_current_suspend(
+					bq2419x, 500);
+			if (ret < 0)
+				dev_err(bq2419x->dev,
+				"Configuration of charging failed: %d\n", ret);
+	} else {
 		ret = bq2419x_set_charging_current_suspend(bq2419x, 500);
 		if (ret < 0)
 			dev_err(bq2419x->dev,
@@ -1634,13 +1889,7 @@ static int bq2419x_resume(struct device *dev)
 	if (!bq2419x->battery_presense)
 		return 0;
 
-	ret = regmap_read(bq2419x->regmap, BQ2419X_FAULT_REG, &val);
-	if (ret < 0) {
-		dev_err(bq2419x->dev, "FAULT_REG read failed %d\n", ret);
-		return ret;
-	}
-
-	ret = bq2419x_fault_clear_sts(bq2419x);
+	ret = bq2419x_fault_clear_sts(bq2419x, &val);
 	if (ret < 0) {
 		dev_err(bq2419x->dev, "fault clear status failed %d\n", ret);
 		return ret;
@@ -1674,6 +1923,35 @@ static int bq2419x_resume(struct device *dev)
 		ret = bq2419x_reset_wdt(bq2419x, "Resume");
 		if (ret < 0)
 			dev_err(bq2419x->dev, "Reset WDT failed: %d\n", ret);
+	}
+
+	if(val & BQ2419x_FAULT_CHRG_SAFTY) {
+		bq_chg_err(bq2419x, "Safety timer Expired\n");
+		ret = bq2419x_reset_safety_timer(bq2419x);
+		if (ret < 0) {
+			dev_err(bq2419x->dev,
+				"Reset safety timer failed %d\n", ret);
+			return ret;
+		}
+
+		ret = regmap_read(bq2419x->regmap, BQ2419X_PWR_ON_REG, &val);
+		if (ret < 0) {
+			dev_err(bq2419x->dev,
+				"PWR_ON_REG read failed %d", ret);
+			return ret;
+		}
+
+		if ((val & BQ2419X_ENABLE_CHARGE_MASK) ==
+					BQ2419X_DISABLE_CHARGE) {
+			ret = regmap_update_bits(bq2419x->regmap,
+				BQ2419X_PWR_ON_REG, BQ2419X_ENABLE_CHARGE_MASK,
+				BQ2419X_ENABLE_CHARGE);
+			if (ret < 0) {
+				dev_err(bq2419x->dev,
+					"PWR_ON_REG update failed, %d\n", ret);
+				return ret;
+			}
+		}
 	}
 
 	return 0;
