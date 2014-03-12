@@ -72,7 +72,7 @@ static size_t buffer_start_add_atomic(struct persistent_ram_zone *prz, size_t a)
 	do {
 		old = prz->buffer->start;
 		new = old + a;
-		while (unlikely(new > prz->buffer_size))
+		while (unlikely(new >= prz->buffer_size))
 			new -= prz->buffer_size;
 	} while (compare_and_exchange(&prz->buffer->start, old, new) != old);
 
@@ -107,7 +107,7 @@ static size_t buffer_start_add_locked(struct persistent_ram_zone *prz, size_t a)
 
 	old = atomic_read(&prz->buffer->start);
 	new = old + a;
-	while (unlikely(new > prz->buffer_size))
+	while (unlikely(new >= prz->buffer_size))
 		new -= prz->buffer_size;
 	atomic_set(&prz->buffer->start, new);
 
