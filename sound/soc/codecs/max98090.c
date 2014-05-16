@@ -3811,6 +3811,33 @@ static int __devexit max98090_i2c_remove(struct i2c_client *client)
 	return 0;
 }
 
+static int max98090_runtime_resume(struct device *dev)
+{
+	struct max98090_priv *max98090 = dev_get_drvdata(dev);
+
+	regcache_cache_only(max98090->regmap, false);
+
+	max98090_reset(max98090);
+
+	regcache_sync(max98090->regmap);
+
+	return 0;
+}
+
+static int max98090_runtime_suspend(struct device *dev)
+{
+	struct max98090_priv *max98090 = dev_get_drvdata(dev);
+
+	regcache_cache_only(max98090->regmap, true);
+
+	return 0;
+}
+
+static const struct dev_pm_ops max98090_pm = {
+	SET_RUNTIME_PM_OPS(max98090_runtime_suspend,
+		max98090_runtime_resume, NULL)
+};
+
 static const struct i2c_device_id max98090_i2c_id[] = {
 	{ "max98090", MAX98090 },
 	{ }
