@@ -364,7 +364,7 @@ static struct dentry *d_kill(struct dentry *dentry, struct dentry *parent)
 	__releases(parent->d_lock)
 	__releases(dentry->d_inode->i_lock)
 {
-	__list_del_entry(&dentry->d_child);
+	list_del(&dentry->d_child);
 	/*
 	 * Inform ascending readers that we are no longer attached to the
 	 * dentry tree
