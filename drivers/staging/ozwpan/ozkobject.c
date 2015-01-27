@@ -1,6 +1,7 @@
 /* -----------------------------------------------------------------------------
  * Copyright (c) 2011 Ozmo Inc
  * Released under the GNU General Public License Version 2 (GPLv2).
+ * Copyright (c) 2015, NVIDIA CORPORATION. All rights reserved.
  * -----------------------------------------------------------------------------
  */
 #include <linux/init.h>
@@ -252,6 +253,12 @@ static ssize_t fptr_show(struct kobject *kobj, struct kobj_attribute *attr,
 
 }
 
+static ssize_t latency_show(struct kobject *kobj, struct kobj_attribute *attr,
+				char *buf)
+{
+	return sprintf(buf, "%d\n", oz_get_latency());
+}
+
 static struct kobj_attribute devices_attribute =
 	__ATTR(devices, 0400, devices_show, NULL);
 
@@ -273,6 +280,9 @@ static struct kobj_attribute debug_attribute =
 static struct kobj_attribute fptr_attribute =
 	__ATTR(fptr, 0400, fptr_show, NULL);
 
+static struct kobj_attribute latency_attribute =
+	__ATTR(latency, 0444, latency_show, NULL);
+
 static struct attribute *attrs[] = {
 	&devices_attribute.attr,
 	&stop_attribute.attr,
@@ -281,6 +291,7 @@ static struct attribute *attrs[] = {
 	&mode_attribute.attr,
 	&debug_attribute.attr,
 	&fptr_attribute.attr,
+	&latency_attribute.attr,
 	NULL,
 };
 
