@@ -64,40 +64,7 @@ static inline int compare_and_exchange(size_t *v, int old, int new)
 }
 
 /* increase and wrap the start pointer, returning the old value */
-static size_t buffer_start_add_atomic(struct persistent_ram_zone *prz, size_t a)
-{
-	int old;
-	int new;
-
-	do {
-		old = prz->buffer->start;
-		new = old + a;
-		while (unlikely(new >= prz->buffer_size))
-			new -= prz->buffer_size;
-	} while (compare_and_exchange(&prz->buffer->start, old, new) != old);
-
-	return old;
-}
-
-/* increase the size counter until it hits the max size */
-static void buffer_size_add_atomic(struct persistent_ram_zone *prz, size_t a)
-{
-	size_t old;
-	size_t new;
-
-	if (prz->buffer->size == prz->buffer_size)
-		return;
-
-	do {
-		old = prz->buffer->size;
-		new = old + a;
-		if (new > prz->buffer_size)
-			new = prz->buffer_size;
-	} while (compare_and_exchange(&prz->buffer->size, old, new) != old);
-}
-
-/* increase and wrap the start pointer, returning the old value */
-static size_t buffer_start_add_locked(struct persistent_ram_zone *prz, size_t a)
+static size_t buffer_start_add(struct persistent_ram_zone *prz, size_t a)
 {
 	int old;
 	int new;
@@ -117,7 +84,7 @@ static size_t buffer_start_add_locked(struct persistent_ram_zone *prz, size_t a)
 }
 
 /* increase the size counter until it hits the max size */
-static void buffer_size_add_locked(struct persistent_ram_zone *prz, size_t a)
+static void buffer_size_add(struct persistent_ram_zone *prz, size_t a)
 {
 	size_t old;
 	size_t new;
@@ -137,9 +104,6 @@ static void buffer_size_add_locked(struct persistent_ram_zone *prz, size_t a)
 exit:
 	raw_spin_unlock_irqrestore(&buffer_lock, flags);
 }
-
-static size_t (*buffer_start_add)(struct persistent_ram_zone *, size_t) = buffer_start_add_atomic;
-static void (*buffer_size_add)(struct persistent_ram_zone *, size_t) = buffer_size_add_atomic;
 
 static void notrace persistent_ram_encode_rs8(struct persistent_ram_zone *prz,
 	uint8_t *data, size_t len, uint8_t *ecc)
@@ -441,9 +405,6 @@ static void *persistent_ram_iomap(phys_addr_t start, size_t size,
 			(unsigned long long)size, (unsigned long long)start);
 		return NULL;
 	}
-
-	buffer_start_add = buffer_start_add_locked;
-	buffer_size_add = buffer_size_add_locked;
 
 	if (memtype)
 		va = ioremap(start, size);
