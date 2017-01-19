@@ -1,7 +1,7 @@
 #!/bin/bash
 ROOT_DIR=$(pwd)
 export ARCH=arm
-DEFCONFIG=mocha_user_defconfig
+DEFCONFIG=mocha_debug_defconfig
 CROSS_COMPILER=$ROOT_DIR/toolchain/arm-eabi-5.3/bin/arm-eabi-
 OUT_DIR=$ROOT_DIR/out
 BUILDING_DIR=$OUT_DIR/kernel_obj
