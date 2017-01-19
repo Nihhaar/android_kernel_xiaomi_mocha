@@ -674,7 +674,7 @@ static void acm_port_shutdown(struct tty_port *port)
 		acm_set_control(acm, acm->ctrlout = 0);
 
 		for (;;) {
-			urb = usb_get_from_anchor(&acm->delayed);
+			urb = usb_get_from_anchor(&acm->deferred);
 			if (!urb)
 				break;
 			wb = urb->context;
@@ -1306,7 +1306,7 @@ made_compressed_probe:
 		acm->no_hangup_in_reset_resume = 1;
 	tty_port_init(&acm->port);
 	acm->port.ops = &acm_port_ops;
-	init_usb_anchor(&acm->delayed);
+	init_usb_anchor(&acm->deferred);
 
 	buf = usb_alloc_coherent(usb_dev, ctrlsize, GFP_KERNEL, &acm->ctrl_dma);
 	if (!buf) {

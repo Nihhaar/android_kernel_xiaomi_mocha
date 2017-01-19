@@ -1706,7 +1706,7 @@ static void *arm_iommu_alloc_attrs(struct device *dev, size_t size,
 	size = PAGE_ALIGN(size);
 
 	if (!(gfp & __GFP_WAIT))
-		return __iommu_alloc_atomic(dev, size, handle);
+		return __iommu_alloc_atomic(dev, size, handle, attrs);
 
 	pages = __iommu_alloc_buffer(dev, size, gfp, attrs);
 	if (!pages)

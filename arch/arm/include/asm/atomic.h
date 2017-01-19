@@ -26,8 +26,31 @@
  * strex/ldrex monitor on some implementations. The reason we can use it for
  * atomic_set() is the clrex or dummy strex done on every exception return.
  */
-#define atomic_read(v)	(*(volatile int *)&(v)->counter)
-#define atomic_set(v,i)	(((v)->counter) = (i))
+//#define atomic_read(v)	(*(volatile int *)&(v)->counter)
+//#define atomic_set(v,i)	(((v)->counter) = (i))
+
+/**
+ * atomic_read - read atomic variable
+ * @v: pointer of type atomic_t
+ *
+ * Atomically reads the value of @v.
+ */
+static inline int atomic_read(const atomic_t *v)
+{
+	return *((volatile int *)(&(v->counter)));
+}
+
+/**
+ * atomic_set - set atomic variable
+ * @v: pointer of type atomic_t
+ * @i: required value
+ *
+ * Atomically sets the value of @v to @i.
+ */
+static inline void atomic_set(atomic_t *v, int i)
+{
+	v->counter = i;
+}
 
 #if __LINUX_ARM_ARCH__ >= 6
 

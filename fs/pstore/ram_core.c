@@ -96,8 +96,6 @@ static void buffer_size_add_atomic(struct persistent_ram_zone *prz, size_t a)
 	} while (compare_and_exchange(&prz->buffer->size, old, new) != old);
 }
 
-static DEFINE_RAW_SPINLOCK(buffer_lock);
-
 /* increase and wrap the start pointer, returning the old value */
 static size_t buffer_start_add_locked(struct persistent_ram_zone *prz, size_t a)
 {
