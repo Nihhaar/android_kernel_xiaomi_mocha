@@ -29,7 +29,7 @@
 #include <linux/irqchip/tegra.h>
 #include <linux/tegra_fiq_debugger.h>
 
-#include <asm/fiq_debugger.h>
+#include "../../../drivers/staging/android/fiq_debugger/fiq_debugger.h"
 
 #include <linux/uaccess.h>
 

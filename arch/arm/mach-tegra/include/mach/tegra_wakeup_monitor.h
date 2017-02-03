@@ -46,6 +46,6 @@ struct tegra_wakeup_monitor_platform_data {
 };
 
 extern uint32_t get_rtc_wakeup_src(void);
-extern void set_rtc_wakeup_src(uint32_t value);
+//extern void set_rtc_wakeup_src(uint32_t value);
 
 #endif /* __MACH_TEGRA_WAKEUP_MONITOR_H */
