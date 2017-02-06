@@ -808,6 +808,29 @@ int ext4_ind_trans_blocks(struct inode *inode, int nrblocks, int chunk)
 	return indirects;
 }
 
+
+/*
+ * Truncate transactions can be complex and absolutely huge.  So we need to
+ * be able to restart the transaction at a conventient checkpoint to make
+ * sure we don't overflow the journal.
+ *
+ * start_transaction gets us a new handle for a truncate transaction,
+ * and extend_transaction tries to extend the existing one a bit.  If
+ * extend fails, we need to propagate the failure up and restart the
+ * transaction in the top-level truncate loop. --sct
+ */
+static handle_t *start_transaction(struct inode *inode)
+{
+	handle_t *result;
+	result = ext4_journal_start(inode, EXT4_HT_TRUNCATE,
+				    ext4_blocks_for_truncate(inode));
+	if (!IS_ERR(result))
+		return result;
+	ext4_std_error(inode->i_sb, PTR_ERR(result));
+	return result;
+}
+
+
 /*
  * Truncate transactions can be complex and absolutely huge.  So we need to
  * be able to restart the transaction at a conventient checkpoint to make

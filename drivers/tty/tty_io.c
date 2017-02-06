@@ -1034,7 +1034,7 @@ static ssize_t tty_read(struct file *file, char __user *buf, size_t count,
 	tty_ldisc_deref(ld);
 
 	if (i > 0)
-		tty_update_time(&inode->i_atime);
+		tty_update_time(&file_inode(file)->i_atime);
 
 	return i;
 }
