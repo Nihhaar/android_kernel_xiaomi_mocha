@@ -156,4 +156,6 @@ else
 	fi
 fi
 
+res="-FridayKernel"
+
 echo "$res"
