@@ -245,7 +245,7 @@ static ssize_t do_read_log_to_user(struct logger_log *log,
  * 'log->buffer' which contains the first entry readable by 'euid'
  */
 static size_t get_next_entry_by_uid(struct logger_log *log,
-		size_t off, uid_t euid)
+		size_t off, kuid_t euid)
 {
 	while (off != log->w_off) {
 		struct logger_entry *entry;
@@ -254,7 +254,7 @@ static size_t get_next_entry_by_uid(struct logger_log *log,
 
 		entry = get_entry_header(log, off, &scratch);
 
-		if (entry->euid == euid)
+		if (uid_eq(entry->euid, euid))
 			return off;
 
 		next_len = sizeof(struct logger_entry) + entry->len;
@@ -493,6 +493,7 @@ static ssize_t logger_aio_write(struct kiocb *iocb, const struct iovec *iov,
 
 	mutex_lock(&log->mutex);
 
+	orig = log->w_off;
 
 	/*
 	 * Fix up any readers, pulling them forward to the first readable
@@ -700,6 +701,7 @@ static unsigned int logger_poll(struct file *file, poll_table *wait)
 static long logger_set_version(struct logger_reader *reader, void __user *arg)
 {
 	int version;
+
 	if (copy_from_user(&version, arg, sizeof(int)))
 		return -EFAULT;
 
@@ -900,7 +902,7 @@ static int __init logger_init(void)
 {
 	int ret;
 
-	ret = create_log(LOGGER_LOG_MAIN, 256*1024);
+	ret = create_log(LOGGER_LOG_MAIN, 2*1024*1024);
 	if (unlikely(ret))
 		goto out;
 
@@ -912,7 +914,7 @@ static int __init logger_init(void)
 	if (unlikely(ret))
 		goto out;
 
-	ret = create_log(LOGGER_LOG_SYSTEM, 256*1024);
+	ret = create_log(LOGGER_LOG_SYSTEM, 2*1024*1024);
 	if (unlikely(ret))
 		goto out;
 
