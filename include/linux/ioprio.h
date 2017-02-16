@@ -45,6 +45,13 @@ enum {
  * Fallback BE priority
  */
 #define IOPRIO_NORM	(4)
+static inline int task_ioprio(struct io_context *ioc)
+ {
+         if (ioprio_valid(ioc->ioprio))
+                 return IOPRIO_PRIO_DATA(ioc->ioprio);
+ 
+         return IOPRIO_NORM;
+ }
 
 /*
  * if process has set io priority explicitly, use that. if not, convert
