@@ -2608,9 +2608,9 @@ static int panic_prep_restart(struct notifier_block *this,
 {
 	in_panic = 1;
 	printk(KERN_INFO "Stack trace dump:\n");
-	watchdog_disable();
+//	watchdog_disable();
 	show_state_filter(0);
-	watchdog_enable();
+//	watchdog_enable();
 
 	return NOTIFY_DONE;
 }
